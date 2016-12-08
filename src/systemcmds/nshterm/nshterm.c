@@ -39,7 +39,7 @@
  * for diagnostics
  */
 
-#include <nuttx/config.h>
+#include <px4_config.h>
 #include <termios.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -50,6 +50,7 @@
 #include <apps/nsh.h>
 #include <fcntl.h>
 #include <systemlib/err.h>
+#include <drivers/drv_hrt.h>
 
 #include <uORB/topics/actuator_armed.h>
 
@@ -58,83 +59,92 @@ __EXPORT int nshterm_main(int argc, char *argv[]);
 int
 nshterm_main(int argc, char *argv[])
 {
-    if (argc < 2) {
-        printf("Usage: nshterm <device>\n");
-        exit(1);
-    }
-    unsigned retries = 0;
-    int fd = -1;
-    int armed_fd = orb_subscribe(ORB_ID(actuator_armed));
-    struct actuator_armed_s armed;
-    /* we assume the system does not provide arming status feedback */
-    bool armed_updated = false;
+	if (argc < 2) {
+		printf("Usage: nshterm <device>\n");
+		exit(1);
+	}
 
-    /* try the first 30 seconds or if arming system is ready */
-    while ((retries < 300) || armed_updated) {
+	unsigned retries = 0;
+	int fd = -1;
+	int armed_fd = orb_subscribe(ORB_ID(actuator_armed));
+	struct actuator_armed_s armed;
 
-        /* abort if an arming topic is published and system is armed */
-        bool updated = false;
-        if (orb_check(armed_fd, &updated)) {
-            /* the system is now providing arming status feedback.
-             * instead of timing out, we resort to abort bringing
-             * up the terminal.
-             */
-            armed_updated = true;
-            orb_copy(ORB_ID(actuator_armed), armed_fd, &armed);
+	/* back off 1800 ms to avoid running into the USB setup timing */
+	while (hrt_absolute_time() < 1800U * 1000U) {
+		usleep(50000);
+	}
 
-            if (armed.armed) {
-                /* this is not an error, but we are done */
-                exit(0);
-            }
-        }
+	/* try to bring up the console - stop doing so if the system gets armed */
+	while (true) {
 
-        /* the retries are to cope with the behaviour of /dev/ttyACM0 */
-        /* which may not be ready immediately. */
-        fd = open(argv[1], O_RDWR);
-        if (fd != -1) {
-            break;
-        }
-        usleep(100000);
-        retries++;
-    }
-    if (fd == -1) {
-        perror(argv[1]);
-        exit(1);
-    }
+		/* abort if an arming topic is published and system is armed */
+		bool updated = false;
+		orb_check(armed_fd, &updated);
 
-    /* set up the serial port with output processing */
-    
-    /* Try to set baud rate */
-    struct termios uart_config;
-    int termios_state;
+		if (updated) {
+			/* the system is now providing arming status feedback.
+			 * instead of timing out, we resort to abort bringing
+			 * up the terminal.
+			 */
+			orb_copy(ORB_ID(actuator_armed), armed_fd, &armed);
 
-    /* Back up the original uart configuration to restore it after exit */
-    if ((termios_state = tcgetattr(fd, &uart_config)) < 0) {
-        warnx("ERR get config %s: %d\n", argv[1], termios_state);
-        close(fd);
-        return -1;
-    }
+			if (armed.armed) {
+				/* this is not an error, but we are done */
+				exit(0);
+			}
+		}
 
-    /* Set ONLCR flag (which appends a CR for every LF) */
-    uart_config.c_oflag |= (ONLCR | OPOST/* | OCRNL*/);
+		/* the retries are to cope with the behaviour of /dev/ttyACM0 */
+		/* which may not be ready immediately. */
+		fd = open(argv[1], O_RDWR);
 
-    if ((termios_state = tcsetattr(fd, TCSANOW, &uart_config)) < 0) {
-        warnx("ERR set config %s\n", argv[1]);
-        close(fd);
-        return -1;
-    }
+		if (fd != -1) {
+			close(armed_fd);
+			break;
+		}
 
-    /* setup standard file descriptors */
-    close(0);
-    close(1);
-    close(2);
-    dup2(fd, 0);
-    dup2(fd, 1);
-    dup2(fd, 2);
+		usleep(100000);
+		retries++;
+	}
 
-    nsh_consolemain(0, NULL);
+	if (fd == -1) {
+		perror(argv[1]);
+		exit(1);
+	}
 
-    close(fd);
+	/* set up the serial port with output processing */
 
-    return OK;
+	/* Try to set baud rate */
+	struct termios uart_config;
+	int termios_state;
+
+	/* Back up the original uart configuration to restore it after exit */
+	if ((termios_state = tcgetattr(fd, &uart_config)) < 0) {
+		warnx("ERR get config %s: %d\n", argv[1], termios_state);
+		close(fd);
+		return -1;
+	}
+
+	/* Set ONLCR flag (which appends a CR for every LF) */
+	uart_config.c_oflag |= (ONLCR | OPOST);
+
+	if ((termios_state = tcsetattr(fd, TCSANOW, &uart_config)) < 0) {
+		warnx("ERR set config %s\n", argv[1]);
+		close(fd);
+		return -1;
+	}
+
+	/* setup standard file descriptors */
+	close(0);
+	close(1);
+	close(2);
+	dup2(fd, 0);
+	dup2(fd, 1);
+	dup2(fd, 2);
+
+	nsh_consolemain(0, NULL);
+
+	close(fd);
+
+	return OK;
 }

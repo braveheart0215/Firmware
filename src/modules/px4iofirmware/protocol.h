@@ -33,6 +33,8 @@
 
 #pragma once
 
+#include <inttypes.h>
+
 /**
  * @file protocol.h
  *
@@ -43,7 +45,7 @@
  *
  * The first two bytes of each write select a page and offset address
  * respectively. Subsequent reads and writes increment the offset within
- * the page. 
+ * the page.
  *
  * Some pages are read- or write-only.
  *
@@ -53,7 +55,7 @@
  * Writes to unimplemented registers are ignored. Reads from unimplemented
  * registers return undefined values.
  *
- * As convention, values that would be floating point in other parts of 
+ * As convention, values that would be floating point in other parts of
  * the PX4 system are expressed as signed integer values scaled by 10000,
  * e.g. control values range from -10000..10000.  Use the REG_TO_SIGNED and
  * SIGNED_TO_REG macros to convert between register representation and
@@ -63,7 +65,7 @@
  * readable pages to be densely packed. Page numbers do not need to be
  * packed.
  *
- * Definitions marked [1] are only valid on PX4IOv1 boards. Likewise, 
+ * Definitions marked [1] are only valid on PX4IOv1 boards. Likewise,
  * [2] denotes definitions specific to the PX4IOv2 board.
  */
 
@@ -90,7 +92,6 @@
 #define PX4IO_P_CONFIG_RC_INPUT_COUNT		6	/* hardcoded max R/C input count supported */
 #define PX4IO_P_CONFIG_ADC_INPUT_COUNT		7	/* hardcoded max ADC inputs */
 #define PX4IO_P_CONFIG_RELAY_COUNT		8	/* hardcoded # of relay outputs */
-#define PX4IO_P_CONFIG_CONTROL_GROUP_COUNT	8	/**< hardcoded # of control groups*/
 
 /* dynamic status page */
 #define PX4IO_PAGE_STATUS		1
@@ -113,6 +114,7 @@
 #define PX4IO_P_STATUS_FLAGS_SAFETY_OFF		(1 << 12) /* safety is off */
 #define PX4IO_P_STATUS_FLAGS_FMU_INITIALIZED	(1 << 13) /* FMU was initialized and OK once */
 #define PX4IO_P_STATUS_FLAGS_RC_ST24		(1 << 14) /* ST24 input is valid */
+#define PX4IO_P_STATUS_FLAGS_RC_SUMD		(1 << 15) /* SUMD input is valid */
 
 #define PX4IO_P_STATUS_ALARMS			3	 /* alarm flags - alarms latch, write 1 to a bit to clear it */
 #define PX4IO_P_STATUS_ALARMS_VBATT_LOW		(1 << 0) /* [1] VBatt is very close to regulator dropout */
@@ -129,6 +131,11 @@
 #define PX4IO_P_STATUS_VSERVO			6	/* [2] servo rail voltage in mV */
 #define PX4IO_P_STATUS_VRSSI			7	/* [2] RSSI voltage */
 #define PX4IO_P_STATUS_PRSSI			8	/* [2] RSSI PWM value */
+
+#define PX4IO_P_STATUS_MIXER			9	 /* mixer actuator limit flags */
+#define PX4IO_P_STATUS_MIXER_LOWER_LIMIT 		(1 << 0) /**< at least one actuator output has reached lower limit */
+#define PX4IO_P_STATUS_MIXER_UPPER_LIMIT 		(1 << 1) /**< at least one actuator output has reached upper limit */
+#define PX4IO_P_STATUS_MIXER_YAW_LIMIT 			(1 << 2) /**< yaw control is limited because it causes output clipping */
 
 /* array of post-mix actuator outputs, -10000..10000 */
 #define PX4IO_PAGE_ACTUATORS		2		/* 0..CONFIG_ACTUATOR_COUNT-1 */
@@ -209,14 +216,14 @@ enum {							/* DSM bind states */
 	dsm_bind_send_pulses,
 	dsm_bind_reinit_uart
 };
-						/* 8 */
+/* 8 */
 #define PX4IO_P_SETUP_SET_DEBUG			9	/* debug level for IO board */
 
 #define PX4IO_P_SETUP_REBOOT_BL			10	/* reboot IO into bootloader */
 #define PX4IO_REBOOT_BL_MAGIC			14662	/* required argument for reboot (random) */
 
 #define PX4IO_P_SETUP_CRC			11	/* get CRC of IO firmware */
-						/* storage space of 12 occupied by CRC */
+/* storage space of 12 occupied by CRC */
 #define PX4IO_P_SETUP_FORCE_SAFETY_OFF		12	/* force safety switch into
                                                            'armed' (PWM enabled) state - this is a non-data write and
                                                            hence index 12 can safely be used. */
@@ -224,6 +231,23 @@ enum {							/* DSM bind states */
 
 #define PX4IO_P_SETUP_FORCE_SAFETY_ON		14	/* force safety switch into 'disarmed' (PWM disabled state) */
 #define PX4IO_FORCE_SAFETY_MAGIC		22027	/* required argument for force safety (random) */
+
+#define PX4IO_P_SETUP_PWM_REVERSE		15	/**< Bitmask to reverse PWM channels 1-8 */
+#define PX4IO_P_SETUP_TRIM_ROLL			16	/**< Roll trim, in actuator units */
+#define PX4IO_P_SETUP_TRIM_PITCH		17	/**< Pitch trim, in actuator units */
+#define PX4IO_P_SETUP_TRIM_YAW			18	/**< Yaw trim, in actuator units */
+#define PX4IO_P_SETUP_SCALE_ROLL		19	/**< Roll scale, in actuator units */
+#define PX4IO_P_SETUP_SCALE_PITCH		20	/**< Pitch scale, in actuator units */
+#define PX4IO_P_SETUP_SCALE_YAW			21	/**< Yaw scale, in actuator units */
+
+#define PX4IO_P_SETUP_SBUS_RATE			22	/* frame rate of SBUS1 output in Hz */
+
+#define PX4IO_P_SETUP_MOTOR_SLEW_MAX		24 	/* max motor slew rate */
+
+#define PX4IO_P_SETUP_THERMAL			25	/* thermal management */
+#define PX4IO_THERMAL_IGNORE			UINT16_MAX
+#define PX4IO_THERMAL_OFF			0
+#define PX4IO_THERMAL_FULL			10000
 
 /* autopilot control values, -10000..10000 */
 #define PX4IO_PAGE_CONTROLS			51	/**< actuator control groups, one after the other, 8 wide */
@@ -325,8 +349,7 @@ struct IOPacket {
 #define PKT_CODE(_p)	((_p).count_code & PKT_CODE_MASK)
 #define PKT_SIZE(_p)	((size_t)((uint8_t *)&((_p).regs[PKT_COUNT(_p)]) - ((uint8_t *)&(_p))))
 
-static const uint8_t crc8_tab[256] __attribute__((unused)) =
-{
+static const uint8_t crc8_tab[256] __attribute__((unused)) = {
 	0x00, 0x07, 0x0E, 0x09, 0x1C, 0x1B, 0x12, 0x15,
 	0x38, 0x3F, 0x36, 0x31, 0x24, 0x23, 0x2A, 0x2D,
 	0x70, 0x77, 0x7E, 0x79, 0x6C, 0x6B, 0x62, 0x65,
@@ -369,8 +392,9 @@ crc_packet(struct IOPacket *pkt)
 	uint8_t *p = (uint8_t *)pkt;
 	uint8_t c = 0;
 
-	while (p < end)
-		c = crc8_tab[c ^ *(p++)];
+	while (p < end) {
+		c = crc8_tab[c ^ * (p++)];
+	}
 
 	return c;
 }

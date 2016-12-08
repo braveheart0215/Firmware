@@ -44,12 +44,17 @@
 #define MATRIX_HPP
 
 #include <stdio.h>
-#include "../CMSIS/Include/arm_math.h"
+#include <cmath>
+
+#include "Vector.hpp"	// Vector and eigen_matrix_instance
+
+#include "matrix/math.hpp"
+#include <platforms/px4_defines.h>
 
 namespace math
 {
 
-template <unsigned int M, unsigned int N>
+template<unsigned int M, unsigned int N>
 class __EXPORT Matrix;
 
 // MxN matrix with float elements
@@ -65,7 +70,7 @@ public:
 	/**
 	 * struct for using arm_math functions
 	 */
-	arm_matrix_instance_f32 arm_mat;
+	eigen_matrix_instance arm_mat;
 
 	/**
 	 * trivial ctor
@@ -112,6 +117,24 @@ public:
 	 */
 	void set(const float d[M][N]) {
 		memcpy(data, d, sizeof(data));
+	}
+
+	/**
+	 * set row from vector
+	 */
+	void set_row(unsigned int row, const Vector<N> v) {
+		for (unsigned i = 0; i < N; i++) {
+			data[row][i] = v.data[i];
+		}
+	}
+
+	/**
+	 * set column from vector
+	 */
+	void set_col(unsigned int col, const Vector<M> v) {
+		for (unsigned i = 0; i < M; i++) {
+			data[i][col] = v.data[i];
+		}
 	}
 
 	/**
@@ -180,8 +203,8 @@ public:
 	Matrix<M, N> operator -(void) const {
 		Matrix<M, N> res;
 
-		for (unsigned int i = 0; i < N; i++)
-			for (unsigned int j = 0; j < M; j++)
+		for (unsigned int i = 0; i < M; i++)
+			for (unsigned int j = 0; j < N; j++)
 				res.data[i][j] = -data[i][j];
 
 		return res;
@@ -193,16 +216,16 @@ public:
 	Matrix<M, N> operator +(const Matrix<M, N> &m) const {
 		Matrix<M, N> res;
 
-		for (unsigned int i = 0; i < N; i++)
-			for (unsigned int j = 0; j < M; j++)
+		for (unsigned int i = 0; i < M; i++)
+			for (unsigned int j = 0; j < N; j++)
 				res.data[i][j] = data[i][j] + m.data[i][j];
 
 		return res;
 	}
 
 	Matrix<M, N> &operator +=(const Matrix<M, N> &m) {
-		for (unsigned int i = 0; i < N; i++)
-			for (unsigned int j = 0; j < M; j++)
+		for (unsigned int i = 0; i < M; i++)
+			for (unsigned int j = 0; j < N; j++)
 				data[i][j] += m.data[i][j];
 
 		return *static_cast<Matrix<M, N>*>(this);
@@ -222,8 +245,8 @@ public:
 	}
 
 	Matrix<M, N> &operator -=(const Matrix<M, N> &m) {
-		for (unsigned int i = 0; i < N; i++)
-			for (unsigned int j = 0; j < M; j++)
+		for (unsigned int i = 0; i < M; i++)
+			for (unsigned int j = 0; j < N; j++)
 				data[i][j] -= m.data[i][j];
 
 		return *static_cast<Matrix<M, N>*>(this);
@@ -255,7 +278,7 @@ public:
 
 		for (unsigned int i = 0; i < M; i++)
 			for (unsigned int j = 0; j < N; j++)
-				res[i][j] = data[i][j] / num;
+				res.data[i][j] = data[i][j] / num;
 
 		return res;
 	}
@@ -273,8 +296,10 @@ public:
 	 */
 	template <unsigned int P>
 	Matrix<M, P> operator *(const Matrix<N, P> &m) const {
-		Matrix<M, P> res;
-		arm_mat_mult_f32(&arm_mat, &m.arm_mat, &res.arm_mat);
+		matrix::Matrix<float, M, N> Me(this->arm_mat.pData);
+		matrix::Matrix<float, N, P> Him(m.arm_mat.pData);
+		matrix::Matrix<float, M, P> Product = Me * Him;
+		Matrix<M, P> res(Product.data());
 		return res;
 	}
 
@@ -282,8 +307,8 @@ public:
 	 * transpose the matrix
 	 */
 	Matrix<N, M> transposed(void) const {
-		Matrix<N, M> res;
-		arm_mat_trans_f32(&this->arm_mat, &res.arm_mat);
+		matrix::Matrix<float, M, N> Me(this->arm_mat.pData);
+		Matrix<N, M> res(Me.transpose().data());
 		return res;
 	}
 
@@ -291,8 +316,8 @@ public:
 	 * invert the matrix
 	 */
 	Matrix<M, N> inversed(void) const {
-		Matrix<M, N> res;
-		arm_mat_inverse_f32(&this->arm_mat, &res.arm_mat);
+		matrix::SquareMatrix<float, M> Me = matrix::Matrix<float, M, N>(this->arm_mat.pData);
+		Matrix<M, N> res(Me.I().data());
 		return res;
 	}
 
@@ -319,7 +344,7 @@ public:
 			printf("[ ");
 
 			for (unsigned int j = 0; j < N; j++)
-				printf("%.3f\t", data[i][j]);
+				printf("%.3f\t", (double)data[i][j]);
 
 			printf(" ]\n");
 		}
@@ -352,8 +377,10 @@ public:
 	 * multiplication by a vector
 	 */
 	Vector<M> operator *(const Vector<N> &v) const {
-		Vector<M> res;
-		arm_mat_mult_f32(&this->arm_mat, &v.arm_col, &res.arm_col);
+		matrix::Matrix<float, M, N> Me(this->arm_mat.pData);
+		matrix::Matrix<float, N, 1> Vec(v.arm_col.pData);
+		matrix::Matrix<float, M, 1> Product = Me * Vec;
+		Vector<M> res(Product.data());
 		return res;
 	}
 };
@@ -371,6 +398,21 @@ public:
 	Matrix(const float *d) : MatrixBase<3, 3>(d) {}
 
 	Matrix(const float d[3][3]) : MatrixBase<3, 3>(d) {}
+	/**
+	 * set data
+	 */
+	void set(const float d[9]) {
+		memcpy(data, d, sizeof(data));
+	}
+
+#if defined(__PX4_ROS)
+	/**
+	 * set data from boost::array
+	 */
+	void set(const boost::array<float, 9ul> d) {
+	set(static_cast<const float*>(d.data()));
+	}
+#endif
 
 	/**
 	 * set to value

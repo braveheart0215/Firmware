@@ -73,10 +73,8 @@ public:
 	 * @return 0 if updated / sent, -1 if unchanged
 	 */
 	int update(const hrt_abstime t);
-	static MavlinkStream *new_instance(const Mavlink *mavlink);
-	static const char *get_name_static();
 	virtual const char *get_name() const = 0;
-	virtual uint8_t get_id() = 0;
+	virtual uint16_t get_id() = 0;
 
 	/**
 	 * @return true if steam rate shouldn't be adjusted
@@ -88,18 +86,30 @@ public:
 	 */
 	virtual unsigned get_size() = 0;
 
+	/**
+	 * Get the average message size
+	 *
+	 * For a normal stream this equals the message size,
+	 * for something like a parameter or mission message
+	 * this equals usually zero, as no bandwidth
+	 * needs to be reserved
+	 */
+	virtual unsigned get_size_avg() { return get_size(); }
+
 protected:
-	Mavlink *    _mavlink;
+	Mavlink     *_mavlink;
 	unsigned int _interval;
 
+#ifndef __PX4_QURT
 	virtual void send(const hrt_abstime t) = 0;
+#endif
 
 private:
 	hrt_abstime _last_sent;
 
 	/* do not allow top copying this class */
-	MavlinkStream(const MavlinkStream&);
-	MavlinkStream& operator=(const MavlinkStream&);
+	MavlinkStream(const MavlinkStream &);
+	MavlinkStream &operator=(const MavlinkStream &);
 };
 
 

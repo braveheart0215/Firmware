@@ -35,16 +35,22 @@
  * @author Pavel Kirienko <pavel.kirienko@gmail.com>
  */
 
-#include <nuttx/config.h>
+#include <px4_config.h>
 #include <systemlib/param/param.h>
 
 /**
- * Enable UAVCAN.
+ * UAVCAN mode
  *
- * Enables support for UAVCAN-interfaced actuators and sensors.
+ *  0 - UAVCAN disabled.
+ *  1 - Basic support for UAVCAN actuators and sensors.
+ *  2 - Full support for dynamic node ID allocation and firmware update.
+ *  3 - Sets the motor control outputs to UAVCAN and enables support for dynamic node ID allocation and firmware update.
  *
  * @min 0
- * @max 1
+ * @max 3
+ * @value 0 Disabled
+ * @value 2 Sensors Enabled
+ * @value 3 Sensors and Motors
  * @group UAVCAN
  */
 PARAM_DEFINE_INT32(UAVCAN_ENABLE, 0);
@@ -63,11 +69,18 @@ PARAM_DEFINE_INT32(UAVCAN_NODE_ID, 1);
 /**
  * UAVCAN CAN bus bitrate.
  *
+ * @unit bit/s
  * @min 20000
  * @max 1000000
  * @group UAVCAN
  */
 PARAM_DEFINE_INT32(UAVCAN_BITRATE, 1000000);
 
-
-
+/**
+ * UAVCAN ESC will spin at idle throttle when armed, even if the mixer outputs zero setpoints.
+ *
+ * @min 0
+ * @max 1
+ * @group UAVCAN
+ */
+PARAM_DEFINE_INT32(UAVCAN_ESC_IDLT, 0);

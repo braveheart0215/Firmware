@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2013 PX4 Development Team. All rights reserved.
+ *   Copyright (c) 2013-2015 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -38,7 +38,8 @@
  * Driver for the TeraRanger One range finders connected via I2C.
  */
 
-#include <nuttx/config.h>
+#include <px4_config.h>
+#include <px4_defines.h>
 
 #include <drivers/device/i2c.h>
 
@@ -68,29 +69,27 @@
 
 #include <uORB/uORB.h>
 #include <uORB/topics/subsystem_info.h>
+#include <uORB/topics/distance_sensor.h>
 
 #include <board_config.h>
 
 /* Configuration Constants */
-#define TRONE_BUS 		PX4_I2C_BUS_EXPANSION
-#define TRONE_BASEADDR 		0x30 /* 7-bit address */
-#define TRONE_DEVICE_PATH 	"/dev/trone"
+#define TRONE_BUS           PX4_I2C_BUS_EXPANSION
+#define TRONE_BASEADDR      0x30 /* 7-bit address */
+#define TRONE_DEVICE_PATH   	"/dev/trone"
 
 /* TRONE Registers addresses */
 
 #define TRONE_MEASURE_REG	0x00		/* Measure range register */
+#define TRONE_WHO_AM_I_REG  0x01        /* Who am I test register */
+#define TRONE_WHO_AM_I_REG_VAL 0xA1
+
 
 /* Device limits */
 #define TRONE_MIN_DISTANCE (0.20f)
 #define TRONE_MAX_DISTANCE (14.00f)
 
 #define TRONE_CONVERSION_INTERVAL 50000 /* 50ms */
-
-/* oddly, ERROR is not defined for c++ */
-#ifdef ERROR
-# undef ERROR
-#endif
-static const int ERROR = -1;
 
 #ifndef CONFIG_SCHED_WORKQUEUE
 # error This requires CONFIG_SCHED_WORKQUEUE.
@@ -119,13 +118,15 @@ private:
 	float				_min_distance;
 	float				_max_distance;
 	work_s				_work;
-	RingBuffer			*_reports;
+	ringbuffer::RingBuffer		*_reports;
 	bool				_sensor_ok;
+	uint8_t				_valid;
 	int					_measure_ticks;
 	bool				_collect_phase;
-	int					_class_instance;
+	int				_class_instance;
+	int				_orb_class_instance;
 
-	orb_advert_t		_range_finder_topic;
+	orb_advert_t		_distance_sensor_topic;
 
 	perf_counter_t		_sample_perf;
 	perf_counter_t		_comms_errors;
@@ -182,40 +183,41 @@ private:
 };
 
 static const uint8_t crc_table[] = {
-    0x00, 0x07, 0x0e, 0x09, 0x1c, 0x1b, 0x12, 0x15, 0x38, 0x3f, 0x36, 0x31,
-    0x24, 0x23, 0x2a, 0x2d, 0x70, 0x77, 0x7e, 0x79, 0x6c, 0x6b, 0x62, 0x65,
-    0x48, 0x4f, 0x46, 0x41, 0x54, 0x53, 0x5a, 0x5d, 0xe0, 0xe7, 0xee, 0xe9,
-    0xfc, 0xfb, 0xf2, 0xf5, 0xd8, 0xdf, 0xd6, 0xd1, 0xc4, 0xc3, 0xca, 0xcd,
-    0x90, 0x97, 0x9e, 0x99, 0x8c, 0x8b, 0x82, 0x85, 0xa8, 0xaf, 0xa6, 0xa1,
-    0xb4, 0xb3, 0xba, 0xbd, 0xc7, 0xc0, 0xc9, 0xce, 0xdb, 0xdc, 0xd5, 0xd2,
-    0xff, 0xf8, 0xf1, 0xf6, 0xe3, 0xe4, 0xed, 0xea, 0xb7, 0xb0, 0xb9, 0xbe,
-    0xab, 0xac, 0xa5, 0xa2, 0x8f, 0x88, 0x81, 0x86, 0x93, 0x94, 0x9d, 0x9a,
-    0x27, 0x20, 0x29, 0x2e, 0x3b, 0x3c, 0x35, 0x32, 0x1f, 0x18, 0x11, 0x16,
-    0x03, 0x04, 0x0d, 0x0a, 0x57, 0x50, 0x59, 0x5e, 0x4b, 0x4c, 0x45, 0x42,
-    0x6f, 0x68, 0x61, 0x66, 0x73, 0x74, 0x7d, 0x7a, 0x89, 0x8e, 0x87, 0x80,
-    0x95, 0x92, 0x9b, 0x9c, 0xb1, 0xb6, 0xbf, 0xb8, 0xad, 0xaa, 0xa3, 0xa4,
-    0xf9, 0xfe, 0xf7, 0xf0, 0xe5, 0xe2, 0xeb, 0xec, 0xc1, 0xc6, 0xcf, 0xc8,
-    0xdd, 0xda, 0xd3, 0xd4, 0x69, 0x6e, 0x67, 0x60, 0x75, 0x72, 0x7b, 0x7c,
-    0x51, 0x56, 0x5f, 0x58, 0x4d, 0x4a, 0x43, 0x44, 0x19, 0x1e, 0x17, 0x10,
-    0x05, 0x02, 0x0b, 0x0c, 0x21, 0x26, 0x2f, 0x28, 0x3d, 0x3a, 0x33, 0x34,
-    0x4e, 0x49, 0x40, 0x47, 0x52, 0x55, 0x5c, 0x5b, 0x76, 0x71, 0x78, 0x7f,
-    0x6a, 0x6d, 0x64, 0x63, 0x3e, 0x39, 0x30, 0x37, 0x22, 0x25, 0x2c, 0x2b,
-    0x06, 0x01, 0x08, 0x0f, 0x1a, 0x1d, 0x14, 0x13, 0xae, 0xa9, 0xa0, 0xa7,
-    0xb2, 0xb5, 0xbc, 0xbb, 0x96, 0x91, 0x98, 0x9f, 0x8a, 0x8d, 0x84, 0x83,
-    0xde, 0xd9, 0xd0, 0xd7, 0xc2, 0xc5, 0xcc, 0xcb, 0xe6, 0xe1, 0xe8, 0xef,
-    0xfa, 0xfd, 0xf4, 0xf3
+	0x00, 0x07, 0x0e, 0x09, 0x1c, 0x1b, 0x12, 0x15, 0x38, 0x3f, 0x36, 0x31,
+	0x24, 0x23, 0x2a, 0x2d, 0x70, 0x77, 0x7e, 0x79, 0x6c, 0x6b, 0x62, 0x65,
+	0x48, 0x4f, 0x46, 0x41, 0x54, 0x53, 0x5a, 0x5d, 0xe0, 0xe7, 0xee, 0xe9,
+	0xfc, 0xfb, 0xf2, 0xf5, 0xd8, 0xdf, 0xd6, 0xd1, 0xc4, 0xc3, 0xca, 0xcd,
+	0x90, 0x97, 0x9e, 0x99, 0x8c, 0x8b, 0x82, 0x85, 0xa8, 0xaf, 0xa6, 0xa1,
+	0xb4, 0xb3, 0xba, 0xbd, 0xc7, 0xc0, 0xc9, 0xce, 0xdb, 0xdc, 0xd5, 0xd2,
+	0xff, 0xf8, 0xf1, 0xf6, 0xe3, 0xe4, 0xed, 0xea, 0xb7, 0xb0, 0xb9, 0xbe,
+	0xab, 0xac, 0xa5, 0xa2, 0x8f, 0x88, 0x81, 0x86, 0x93, 0x94, 0x9d, 0x9a,
+	0x27, 0x20, 0x29, 0x2e, 0x3b, 0x3c, 0x35, 0x32, 0x1f, 0x18, 0x11, 0x16,
+	0x03, 0x04, 0x0d, 0x0a, 0x57, 0x50, 0x59, 0x5e, 0x4b, 0x4c, 0x45, 0x42,
+	0x6f, 0x68, 0x61, 0x66, 0x73, 0x74, 0x7d, 0x7a, 0x89, 0x8e, 0x87, 0x80,
+	0x95, 0x92, 0x9b, 0x9c, 0xb1, 0xb6, 0xbf, 0xb8, 0xad, 0xaa, 0xa3, 0xa4,
+	0xf9, 0xfe, 0xf7, 0xf0, 0xe5, 0xe2, 0xeb, 0xec, 0xc1, 0xc6, 0xcf, 0xc8,
+	0xdd, 0xda, 0xd3, 0xd4, 0x69, 0x6e, 0x67, 0x60, 0x75, 0x72, 0x7b, 0x7c,
+	0x51, 0x56, 0x5f, 0x58, 0x4d, 0x4a, 0x43, 0x44, 0x19, 0x1e, 0x17, 0x10,
+	0x05, 0x02, 0x0b, 0x0c, 0x21, 0x26, 0x2f, 0x28, 0x3d, 0x3a, 0x33, 0x34,
+	0x4e, 0x49, 0x40, 0x47, 0x52, 0x55, 0x5c, 0x5b, 0x76, 0x71, 0x78, 0x7f,
+	0x6a, 0x6d, 0x64, 0x63, 0x3e, 0x39, 0x30, 0x37, 0x22, 0x25, 0x2c, 0x2b,
+	0x06, 0x01, 0x08, 0x0f, 0x1a, 0x1d, 0x14, 0x13, 0xae, 0xa9, 0xa0, 0xa7,
+	0xb2, 0xb5, 0xbc, 0xbb, 0x96, 0x91, 0x98, 0x9f, 0x8a, 0x8d, 0x84, 0x83,
+	0xde, 0xd9, 0xd0, 0xd7, 0xc2, 0xc5, 0xcc, 0xcb, 0xe6, 0xe1, 0xe8, 0xef,
+	0xfa, 0xfd, 0xf4, 0xf3
 };
 
-uint8_t crc8(uint8_t *p, uint8_t len){
-        uint16_t i;
-        uint16_t crc = 0x0;
+static uint8_t crc8(uint8_t *p, uint8_t len)
+{
+	uint16_t i;
+	uint16_t crc = 0x0;
 
-        while (len--) {
-                i = (crc ^ *p++) & 0xFF;
-                crc = (crc_table[i] ^ (crc << 8)) & 0xFF;
-        }
+	while (len--) {
+		i = (crc ^ *p++) & 0xFF;
+		crc = (crc_table[i] ^ (crc << 8)) & 0xFF;
+	}
 
-        return crc & 0xFF;
+	return crc & 0xFF;
 }
 
 /*
@@ -229,13 +231,15 @@ TRONE::TRONE(int bus, int address) :
 	_max_distance(TRONE_MAX_DISTANCE),
 	_reports(nullptr),
 	_sensor_ok(false),
+	_valid(0),
 	_measure_ticks(0),
 	_collect_phase(false),
 	_class_instance(-1),
-	_range_finder_topic(-1),
-	_sample_perf(perf_alloc(PC_ELAPSED, "trone_read")),
-	_comms_errors(perf_alloc(PC_COUNT, "trone_comms_errors")),
-	_buffer_overflows(perf_alloc(PC_COUNT, "trone_buffer_overflows"))
+	_orb_class_instance(-1),
+	_distance_sensor_topic(nullptr),
+	_sample_perf(perf_alloc(PC_ELAPSED, "tr1_read")),
+	_comms_errors(perf_alloc(PC_COUNT, "tr1_com_err")),
+	_buffer_overflows(perf_alloc(PC_COUNT, "tr1_buf_of"))
 {
 	// up the retries since the device misses the first measure attempts
 	I2C::_retries = 3;
@@ -258,7 +262,7 @@ TRONE::~TRONE()
 	}
 
 	if (_class_instance != -1) {
-		unregister_class_devname(RANGE_FINDER_DEVICE_PATH, _class_instance);
+		unregister_class_devname(RANGE_FINDER_BASE_DEVICE_PATH, _class_instance);
 	}
 
 	// free perf counters
@@ -270,7 +274,7 @@ TRONE::~TRONE()
 int
 TRONE::init()
 {
-	int ret = ERROR;
+	int ret = PX4_ERROR;
 
 	/* do I2C init (and probe) first */
 	if (I2C::init() != OK) {
@@ -278,23 +282,25 @@ TRONE::init()
 	}
 
 	/* allocate basic report buffers */
-	_reports = new RingBuffer(2, sizeof(range_finder_report));
+	_reports = new ringbuffer::RingBuffer(2, sizeof(distance_sensor_s));
 
 	if (_reports == nullptr) {
 		goto out;
 	}
 
-	_class_instance = register_class_devname(RANGE_FINDER_DEVICE_PATH);
+	_class_instance = register_class_devname(RANGE_FINDER_BASE_DEVICE_PATH);
 
 	if (_class_instance == CLASS_DEVICE_PRIMARY) {
 		/* get a publish handle on the range finder topic */
-		struct range_finder_report rf_report;
+		struct distance_sensor_s ds_report;
 		measure();
-		_reports->get(&rf_report);
-		_range_finder_topic = orb_advertise(ORB_ID(sensor_range_finder), &rf_report);
+		_reports->get(&ds_report);
 
-		if (_range_finder_topic < 0) {
-			debug("failed to create sensor_range_finder object. Did you start uOrb?");
+		_distance_sensor_topic = orb_advertise_multi(ORB_ID(distance_sensor), &ds_report,
+					 &_orb_class_instance, ORB_PRIO_LOW);
+
+		if (_distance_sensor_topic == nullptr) {
+			DEVICE_LOG("failed to create distance_sensor object. Did you start uOrb?");
 		}
 	}
 
@@ -308,7 +314,26 @@ out:
 int
 TRONE::probe()
 {
-	return measure();
+	uint8_t who_am_i = 0;
+
+	const uint8_t cmd = TRONE_WHO_AM_I_REG;
+
+	// set the I2C bus address
+	set_address(TRONE_BASEADDR);
+
+	// can't use a single transfer as TROne need a bit of time for internal processing
+	if (transfer(&cmd, 1, nullptr, 0) == OK) {
+		if (transfer(nullptr, 0, &who_am_i, 1) == OK && who_am_i == TRONE_WHO_AM_I_REG_VAL) {
+			return measure();
+		}
+	}
+
+	DEVICE_DEBUG("WHO_AM_I byte mismatch 0x%02x should be 0x%02x\n",
+		     (unsigned)who_am_i,
+		     TRONE_WHO_AM_I_REG_VAL);
+
+	// not found on any address
+	return -EIO;
 }
 
 void
@@ -412,14 +437,14 @@ TRONE::ioctl(struct file *filp, int cmd, unsigned long arg)
 				return -EINVAL;
 			}
 
-			irqstate_t flags = irqsave();
+			irqstate_t flags = px4_enter_critical_section();
 
 			if (!_reports->resize(arg)) {
-				irqrestore(flags);
+				px4_leave_critical_section(flags);
 				return -ENOMEM;
 			}
 
-			irqrestore(flags);
+			px4_leave_critical_section(flags);
 
 			return OK;
 		}
@@ -452,8 +477,8 @@ TRONE::ioctl(struct file *filp, int cmd, unsigned long arg)
 ssize_t
 TRONE::read(struct file *filp, char *buffer, size_t buflen)
 {
-	unsigned count = buflen / sizeof(struct range_finder_report);
-	struct range_finder_report *rbuf = reinterpret_cast<struct range_finder_report *>(buffer);
+	unsigned count = buflen / sizeof(struct distance_sensor_s);
+	struct distance_sensor_s *rbuf = reinterpret_cast<struct distance_sensor_s *>(buffer);
 	int ret = 0;
 
 	/* buffer must be large enough */
@@ -522,7 +547,7 @@ TRONE::measure()
 
 	if (OK != ret) {
 		perf_count(_comms_errors);
-		log("i2c::transfer returned %d", ret);
+		DEVICE_LOG("i2c::transfer returned %d", ret);
 		return ret;
 	}
 
@@ -534,9 +559,9 @@ TRONE::measure()
 int
 TRONE::collect()
 {
-	int	ret = -EIO;
+	int ret = -EIO;
 
-        /* read from the sensor */
+	/* read from the sensor */
 	uint8_t val[3] = {0, 0, 0};
 
 	perf_begin(_sample_perf);
@@ -544,28 +569,34 @@ TRONE::collect()
 	ret = transfer(nullptr, 0, &val[0], 3);
 
 	if (ret < 0) {
-		log("error reading from sensor: %d", ret);
+		DEVICE_LOG("error reading from sensor: %d", ret);
 		perf_count(_comms_errors);
 		perf_end(_sample_perf);
 		return ret;
 	}
 
-	uint16_t distance = (val[0] << 8) | val[1];
-	float si_units = distance *  0.001f; /* mm to m */
-	struct range_finder_report report;
+	uint16_t distance_mm = (val[0] << 8) | val[1];
+	float distance_m = float(distance_mm) *  1e-3f;
+	struct distance_sensor_s report;
 
-	/* this should be fairly close to the end of the measurement, so the best approximation of the time */
 	report.timestamp = hrt_absolute_time();
-	report.error_count = perf_event_count(_comms_errors);
-	report.distance = si_units;
-	report.minimum_distance = get_minimum_distance();
-	report.maximum_distance = get_maximum_distance();
-	report.valid = crc8(val, 2) == val[2] && si_units > get_minimum_distance() && si_units < get_maximum_distance() ? 1 : 0;
+	/* there is no enum item for a combined LASER and ULTRASOUND which it should be */
+	report.type = distance_sensor_s::MAV_DISTANCE_SENSOR_LASER;
+	report.orientation = 8;
+	report.current_distance = distance_m;
+	report.min_distance = get_minimum_distance();
+	report.max_distance = get_maximum_distance();
+	report.covariance = 0.0f;
+	/* TODO: set proper ID */
+	report.id = 0;
 
+	// This validation check can be used later
+	_valid = crc8(val, 2) == val[2] && (float)report.current_distance > report.min_distance
+		 && (float)report.current_distance < report.max_distance ? 1 : 0;
 
 	/* publish it, if we are the primary */
-	if (_range_finder_topic >= 0) {
-		orb_publish(ORB_ID(sensor_range_finder), _range_finder_topic, &report);
+	if (_distance_sensor_topic != nullptr) {
+		orb_publish(ORB_ID(distance_sensor), _distance_sensor_topic, &report);
 	}
 
 	if (_reports->force(&report)) {
@@ -592,15 +623,15 @@ TRONE::start()
 	work_queue(HPWORK, &_work, (worker_t)&TRONE::cycle_trampoline, this, 1);
 
 	/* notify about state change */
-	struct subsystem_info_s info = {
-		true,
-		true,
-		true,
-		SUBSYSTEM_TYPE_RANGEFINDER
-	};
-	static orb_advert_t pub = -1;
+	struct subsystem_info_s info = {};
+	info.present = true;
+	info.enabled = true;
+	info.ok = true;
+	info.subsystem_type = subsystem_info_s::SUBSYSTEM_TYPE_RANGEFINDER;
 
-	if (pub > 0) {
+	static orb_advert_t pub = nullptr;
+
+	if (pub != nullptr) {
 		orb_publish(ORB_ID(subsystem_info), pub, &info);
 
 	} else {
@@ -630,7 +661,7 @@ TRONE::cycle()
 
 		/* perform collection */
 		if (OK != collect()) {
-			log("collection error");
+			DEVICE_LOG("collection error");
 			/* restart the measurement state machine */
 			start();
 			return;
@@ -643,7 +674,6 @@ TRONE::cycle()
 		 * Is there a collect->measure gap?
 		 */
 		if (_measure_ticks > USEC2TICK(TRONE_CONVERSION_INTERVAL)) {
-
 			/* schedule a fresh cycle call when we are ready to measure again */
 			work_queue(HPWORK,
 				   &_work,
@@ -657,7 +687,7 @@ TRONE::cycle()
 
 	/* measurement phase */
 	if (OK != measure()) {
-		log("measure error");
+		DEVICE_LOG("measure error");
 	}
 
 	/* next phase is collection */
@@ -686,12 +716,6 @@ TRONE::print_info()
  */
 namespace trone
 {
-
-/* oddly, ERROR is not defined for c++ */
-#ifdef ERROR
-# undef ERROR
-#endif
-const int ERROR = -1;
 
 TRONE	*g_dev;
 
@@ -772,7 +796,7 @@ void stop()
 void
 test()
 {
-	struct range_finder_report report;
+	struct distance_sensor_s report;
 	ssize_t sz;
 	int ret;
 
@@ -790,8 +814,8 @@ test()
 	}
 
 	warnx("single read");
-	warnx("measurement: %0.2f m", (double)report.distance);
-	warnx("time:        %lld", report.timestamp);
+	warnx("measurement: %0.2f m", (double)report.current_distance);
+	warnx("time:        %llu", report.timestamp);
 
 	/* start the sensor polling at 2Hz */
 	if (OK != ioctl(fd, SENSORIOCSPOLLRATE, 2)) {
@@ -819,9 +843,8 @@ test()
 		}
 
 		warnx("periodic read %u", i);
-		warnx("valid %u", report.valid);
-		warnx("measurement: %0.3f", (double)report.distance);
-		warnx("time:        %lld", report.timestamp);
+		warnx("measurement: %0.3f", (double)report.current_distance);
+		warnx("time:        %llu", report.timestamp);
 	}
 
 	/* reset the sensor polling to default rate */

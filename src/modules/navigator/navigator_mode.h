@@ -74,7 +74,7 @@ public:
 	virtual void on_inactive();
 
 	/**
-	 * This function is called one time when mode become active, poos_sp_triplet must be initialized here
+	 * This function is called one time when mode become active, pos_sp_triplet must be initialized here
 	 */
 	virtual void on_activation();
 
@@ -92,8 +92,8 @@ private:
 	/* this class has ptr data members, so it should not be copied,
 	 * consequently the copy constructors are private.
 	 */
-	NavigatorMode(const NavigatorMode&);
-	NavigatorMode operator=(const NavigatorMode&);
+	NavigatorMode(const NavigatorMode &);
+	NavigatorMode operator=(const NavigatorMode &);
 };
 
 #endif

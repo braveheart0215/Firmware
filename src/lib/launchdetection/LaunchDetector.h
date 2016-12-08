@@ -55,7 +55,10 @@ class __EXPORT LaunchDetector : public control::SuperBlock
 {
 public:
 	LaunchDetector();
-	~LaunchDetector();
+	LaunchDetector(const LaunchDetector &) = delete;
+	LaunchDetector operator=(const LaunchDetector &) = delete;
+	virtual ~LaunchDetector();
+
 	void reset();
 
 	void update(float accel_x);
@@ -76,10 +79,9 @@ private:
 					       method is checked for further adavancing in the state machine (e.g. when
 					       to power up the motors) */
 
-	LaunchMethod* launchMethods[1];
+	LaunchMethod *launchMethods[1];
 	control::BlockParamInt launchdetection_on;
 	control::BlockParamFloat throttlePreTakeoff;
-
 
 };
 

@@ -43,24 +43,28 @@
 #ifndef VERSION_H_
 #define VERSION_H_
 
-/*
- GIT_VERSION is defined at build time via a Makefile call to the
- git command line.
+/* The preferred method for publishing a board name up is to
+ * provide board_name()
+ *
  */
-#define FREEZE_STR(s) #s
-#define STRINGIFY(s) FREEZE_STR(s)
-#define FW_GIT STRINGIFY(GIT_VERSION)
+__BEGIN_DECLS
 
-#ifdef CONFIG_ARCH_BOARD_PX4FMU_V1
-#define	HW_ARCH "PX4FMU_V1"
-#endif
+__EXPORT const char *board_name(void);
 
-#ifdef CONFIG_ARCH_BOARD_PX4FMU_V2
-#define	HW_ARCH "PX4FMU_V2"
-#endif
+__END_DECLS
 
-#ifdef CONFIG_ARCH_BOARD_AEROCORE
-#define	HW_ARCH "AEROCORE"
+#if defined(CONFIG_ARCH_BOARD_SITL)
+#  define	HW_ARCH "SITL"
+#elif defined(CONFIG_ARCH_BOARD_EAGLE)
+#  define	HW_ARCH "EAGLE"
+#elif defined(CONFIG_ARCH_BOARD_EXCELSIOR)
+#  define HW_ARCH "EXCELSIOR"
+#elif defined(CONFIG_ARCH_BOARD_RPI)
+#  define	HW_ARCH "RPI"
+#elif defined(CONFIG_ARCH_BOARD_BEBOP)
+#  define	HW_ARCH "BEBOP"
+#else
+#define HW_ARCH (board_name())
 #endif
 
 #endif /* VERSION_H_ */
